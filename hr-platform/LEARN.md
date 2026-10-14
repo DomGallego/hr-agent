@@ -169,8 +169,31 @@ Critical detail we built a test for: **`set_config(..., true)` is transaction-lo
 
 Why owners bypass RLS: the table *owner* (and superusers) skip policies entirely —
 that's why the seed loader can insert everything, and why a production app should
-connect as a non-owner role. For our demo the app pool uses the owner; note it in
-the README as a "would-harden-in-prod" item.
+connect as a non-owner role. **We hit this live**: RLS tests connecting as owner
+passed every query unfiltered — policies existed but were silently ignored. The fix
+is a separate `hr_app` LOGIN role for the app pool (see db/migrations/002).
+
+**Two more live-caught gotchas (postgreSQL realities that tests caught):**
+
+```
+ GOTCHA 1: current_setting returns '' not NULL
+ ─────────────────────────────────────────────
+ After a transaction-local set_config('app.employee_id', ...) ends, later queries
+ in the SAME session get current_setting(..., true) = '' (empty string), NOT NULL,
+ because the GUC is "defined" with an empty reset value once used.
+
+   policy: USING (employee_id = current_setting('app.employee_id', true)::int)
+                                                         └── ''::int → ERROR
+
+ fix: USING (employee_id = NULLIF(current_setting('app.employee_id', true), '')::int)
+      empty → NULL → zero rows → fail closed, no crash
+
+ GOTCHA 2: the SET must share a transaction with the query
+ ─────────────────────────────────────────────────────────
+ set_config(..., true) is transaction-local. Two separate implicit transactions
+ (SET here, SELECT there) = the SELECT runs UNSET. Every scoped helper must wrap
+ SET + query in ONE transaction (see fetch_scoped and its mirror in the tests).
+```
 
 ---
 
