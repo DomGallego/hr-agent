@@ -192,9 +192,9 @@ Synthetic generator produces data + golden pairs; human review pass (Dom) before
 
 | Phase | Scope | Est. | Status |
 |---|---|---|---|
-| 0 | Scaffold: uv workspace, compose (postgres+pgvector, api, ui), FastAPI health, CI skeleton, Langfuse Cloud env | ½ day | ⬜ |
-| 1 | Data + auth: migrations, RLS, synthetic generators, JWT, db pool + `SET app.employee_id`, RLS tests (emp A can't see emp B) | 1–2 days | ⬜ |
-| 2 | payslip_agent: LangGraph graph, 4 `@tool`s, OpenRouter free model, note guard, refusals, trace shim, Streamlit SSE chat; first eval suites | 2–3 days | ⬜ |
+| 0 | Scaffold: uv workspace, compose (postgres+pgvector, api, ui), FastAPI health, CI skeleton, Langfuse Cloud env | ½ day | ✅ |
+| 1 | Data + auth: migrations, RLS, synthetic generators, JWT, db pool + `SET app.employee_id`, RLS tests (emp A can't see emp B) | 1–2 days | ✅ |
+| 2 | payslip_agent: LangGraph graph, 4 `@tool`s, OpenRouter free model, note guard, refusals, trace shim, Streamlit SSE chat; first eval suites | 2–3 days | ✅ (Langfuse shim pending keys) |
 | 3 | Evals + Langfuse depth: judge, golden freeze, prompt-version tracking, regression suite in CI, log-policy tests | 1–2 days | ⬜ |
 | 4 | ticket_router: Bitext load/remap, prompted + decision backends, verdict table, drift hook | 2 days | ⬜ |
 | 5 | model_compare: eval matrix runner, shadow replay, `model_flags` flip endpoint, real verdict table | 1–2 days | ⬜ |
