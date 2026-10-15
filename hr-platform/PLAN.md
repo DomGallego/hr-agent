@@ -195,11 +195,11 @@ Synthetic generator produces data + golden pairs; human review pass (Dom) before
 | 0 | Scaffold: uv workspace, compose (postgres+pgvector, api, ui), FastAPI health, CI skeleton, Langfuse Cloud env | ½ day | ✅ |
 | 1 | Data + auth: migrations, RLS, synthetic generators, JWT, db pool + `SET app.employee_id`, RLS tests (emp A can't see emp B) | 1–2 days | ✅ |
 | 2 | payslip_agent: LangGraph graph, 4 `@tool`s, OpenRouter free model, note guard, refusals, trace shim, Streamlit SSE chat; first eval suites | 2–3 days | ✅ (Langfuse shim pending keys) |
-| 3 | Evals + Langfuse depth: judge, golden freeze, prompt-version tracking, regression suite in CI, log-policy tests | 1–2 days | ⬜ |
-| 4 | ticket_router: Bitext load/remap, prompted + decision backends, verdict table, drift hook | 2 days | ⬜ |
-| 5 | model_compare: eval matrix runner, shadow replay, `model_flags` flip endpoint, real verdict table | 1–2 days | ⬜ |
-| 6 | retrieval_watch: trace API reader, drift detector, drift simulator, cohort-diff dashboard | 1–2 days | ⬜ |
-| 7 | Polish: README (diagram, eval results, GIF, one-command setup), optional finetuned arm (weekend), MCP wrapper (stretch), mobile UI check | 1–2 days | ⬜ |
+| 3 | Evals + Langfuse depth: judge, golden freeze, prompt-version tracking, regression suite in CI, log-policy tests | 1–2 days | ✅ (Cloud wiring ready, pending keys) |
+| 4 | ticket_router: Bitext load/remap, prompted + decision backends, verdict table, drift hook | 2 days | ✅ (finetuned arm = documented stub; drift hook lands with S3 in Phase 6) |
+| 5 | model_compare: eval matrix runner, shadow replay, `model_flags` flip endpoint, real verdict table | 1–2 days | ✅ |
+| 6 | retrieval_watch: trace API reader, drift detector, drift simulator, cohort-diff dashboard | 1–2 days | ✅ (Langfuse reader implemented; live validation pending keys) |
+| 7 | Polish: README (diagram, eval results, GIF, one-command setup), optional finetuned arm (weekend), MCP wrapper (stretch), mobile UI check | 1–2 days | ✅ (finetuned arm + MCP = documented roadmap) |
 
 Total: ~10–14 focused days.
 
