@@ -1,11 +1,28 @@
 # LEARN.md — HR AI Platform: concepts, tech stacks, and the whys
 
-> A come-back-to document. First half: every tech in the project explained with text
-> visualizations. Second half: 25 questions to test yourself — answer them from memory
-> *first*, then check the answer key at the bottom. If you can answer all 25 without
-> looking, you can defend this architecture in a panel.
+> A come-back-to document, updated after the final build (all 8 phases shipped).
+> First half: every tech in the project explained with text visualizations.
+> Second half: **35 questions** to test yourself — answer from memory *first*, then
+> check the answer key at the bottom. If you can answer all 35 without looking, you
+> can defend this architecture in a panel.
 >
 > Status legend: ✅ = you can likely defend it already · 🔶 = refresh before the panel
+> · 🆕 = written after the final build, covers what actually shipped
+
+### Where each concept lives in the repo (the as-built map)
+
+| Concept (Part 1 §) | Files | Notes |
+|---|---|---|
+| §2 FastAPI, middleware | `services/api/main.py`, `middleware.py` | `.env` auto-loads (dotenv) |
+| §3 JWT | `services/api/auth.py` | `require_hr_admin` role gate lives here too |
+| §4 RLS | `db/migrations/001–004`, `services/api/db.py`, `tests/test_rls.py` | app connects as non-owner `hr_app` |
+| §6/§7 agent + tools | `modules/payslip_agent/{graph,tools,llm}.py` | multi-tool routing (`get_payslips,get_notes`) |
+| §8 note guard | `modules/payslip_agent/guard.py`, `prompts.py` | rules + tripwire, fail closed |
+| §9 observability | `services/api/observability.py` | keyless no-op; keyed stamps trace IDs |
+| §10 evals | `packages/evals/{loader,make_golden,judge,report}.py`, `suites/` | golden frozen; report CLI regenerates EVAL_REPORT.md |
+| §13 S2/S3/S4 | `modules/{model_compare,retrieval_watch,ticket_router}/` | see §15/§16 below |
+| S4 arms | `modules/ticket_router/backends/`, `router.py` | one interface, one flag |
+| data | `db/seed/{synth,load}.py`, `modules/ticket_router/data.py` | pinned `ref_date` → byte-stable goldens |
 
 ---
 
@@ -510,7 +527,83 @@ schema'd, identity-injected) are identical either way, which is the point of the
 
 ---
 
-# PART 2 — SELF-TEST: 25 QUESTIONS
+## 15. The S4 arms as built (🆕)
+
+One interface, three implementations, selected by `ROUTER_BACKEND` (or the
+`model_flags` row — the S2 flag flip changes it live):
+
+```
+                 classify_ticket(text)  ──►  Prediction(label, confidence, backend)
+                        │
+      ┌─────────────────┼──────────────────────┐
+      ▼                 ▼                      ▼
+ prompted.py      decision.py            finetuned.py
+ free LLM +       calibrated probs;      DistilBERT stub — raises with
+ few-shots        SIMULATED weakness:    instructions. Deliberately OFF.
+                  texts containing
+                  "balance" swap
+                  leave_adjustment→payroll_dispute
+```
+
+- The **simulated weakness is deterministic** (marker substring, not RNG) so the
+  confusion-pair report finds it on every run. The eval suite *fails loudly if the
+  machinery fails to detect it* — a broken report is worse than a known flaw.
+- **Escalation:** confidence < 0.75 → `needs_human_review` (the S4 honesty mechanism:
+  an uncertainty signal, not more accuracy).
+- **Bitext** is downloaded once, cached, intent-interleaved (a degenerate sample —
+  first 400 rows all one intent — once made the mock look 99% accurate by accident),
+  and remapped to HR categories via the explicit `BITEXT_REMAP` table.
+- Honest claims: mock arms only claim **synthetic-text** performance; a test asserts
+  they collapse (<0.5) on real text — the documented reason the LLM/fine-tune arms exist.
+
+## 16. S2/S3 as built (🆕)
+
+```
+ S2 model_compare (modules/model_compare/compare.py)
+ ────────────────────────────────────────────────────
+ decide(current, candidate, hard_fail):
+     hard fail (confusion pair / invented figure) → "keep, revisit"
+     candidate >= current - MARGIN (0.02)          → "switch"
+     else                                          → "keep current"
+ matrix cells: (feature × prompt_ver × model_id), 2 features × 2 arms
+ shadow_replay: re-runs cases, serves_users: False, writes eval_results
+ flag flip: POST /compare/flags — hr_admin only (403 tested); rollback = flip back
+
+ S3 retrieval_watch (modules/retrieval_watch/)
+ ─────────────────────────────────────────────
+ store: LocalScoreStore (jsonl log, keyless) │ LangfuseScoreStore (public API, keyed)
+        └─ protocol get_store(): keyed auto-activates
+ drift.detect: baseline(30d) vs recent(7d), ≥10% relative drop → alert
+        with onset date ("when" is as diagnostic as "who")
+ cohort_diff: affected vs healthy on discriminating dims
+        (score drop, scanned-share) — the "40 vs the 2,960" table
+ simulator: cohort {2,5} "uploads scans" at day 40 → 0.84 → 0.61 decay
+ RBAC reflex: /drift/scores/{id} — an employee sees only their own series
+```
+
+## 17. Live bug log — everything the tests caught after this doc was written (🆕)
+
+Each of these is a panel-worthy story ("tell me about a real bug you caught"):
+
+1. **Import-time binding:** `from services.api.db import _pool` snapshots `None`;
+   the lifespan-created pool was invisible. Fix: read `db._pool` through the module.
+2. **LangGraph sync/async:** `.invoke()` refuses a graph with async-only nodes
+   ("No synchronous function provided") → `ainvoke` everywhere.
+3. **Event-loop collision:** calling `asyncio.run()`-based runners inside FastAPI's
+   loop or on a pool owned by another loop → "Future attached to a different loop".
+   Offline jobs (the eval matrix) run in a worker thread via `asyncio.to_thread`.
+4. **TestClient lifespan:** `TestClient(app)` alone never runs startup/shutdown;
+   use `with TestClient(app) as client` or the DB pool is never initialized.
+5. **Degenerate sample:** first-400 Bitext rows were all one intent → mock scored
+   99% by luck of the fallback label. Sampling must be category-diverse.
+6. **Windows console encoding:** `print()`ing `→` under cp1252 raises
+   `UnicodeEncodeError`; files written as UTF-8 are fine — ASCII-guard console output.
+7. **Port collision:** two Postgres servers (one local, one Docker) on 5432 —
+   host traffic landed on the wrong one; remapped Docker to 5433.
+
+---
+
+# PART 2 — SELF-TEST: 35 QUESTIONS
 
 Answer from memory first. Write your answers down. Then scroll to the key.
 (The point isn't matching the key word-for-word — it's noticing what you *couldn't*
@@ -578,6 +671,31 @@ reconstruct, because that's what the panel will poke.)
     trust than a calibrated 90% one?
 25. Drift: name the S3 root cause and the S4 drift type, then explain why confidence-
     distribution monitoring would have caught BOTH earlier than complaints would.
+
+### E. As-built (Phases 4–7) 🆕
+
+26. What is the backend contract in the ticket router, and why does the fine-tuned
+    arm shipping as a stub that *raises* actually strengthen the S4 story?
+27. The decision arm's "simulated weakness" is deterministic (substring marker) rather
+    than random. Why does determinism matter for the eval machinery?
+28. What makes the confusion-pair report trustworthy? (What does the suite do if the
+    report *fails to detect* the known weakness?)
+29. Why do the mock classifier arms only claim synthetic-text performance? What does
+    the <0.5-on-real-text test document, and what should replace that result once
+    OPENROUTER_API_KEY exists?
+30. State the three branches of `decide()` in model_compare, and why the margin (0.02)
+    must be stated before results. What counts as a "hard fail" in this repo?
+31. What does `shadow_replay` guarantee about user impact, and where does its output
+    go? Why run it before any traffic-percentage rollout?
+32. Walk the flag-flip path: which endpoint, which role can call it, what proves the
+    403 gate, and how is rollback performed?
+33. In retrieval_watch, what two ScoreStore implementations exist, how does
+    `get_store()` choose, and what happens to CI when Langfuse keys are absent?
+34. The drift detector: what are its baseline window, recent window, and threshold?
+    Why is the onset date recorded alongside the drop?
+35. `/drift/scores/{employee_id}` — what authorization rule applies and which S1
+    reflex does it reuse? What does the cohort-diff table show for affected vs
+    healthy employees?
 
 ---
 
@@ -731,6 +849,65 @@ Confidence/score-distribution monitoring catches both *earlier* because distribu
 shift before end-to-end accuracy (or complaints) do — S3's chunk scores fell on day
 one; the complaint hotline had a three-week lag.
 
+**26.** The contract: every arm is a class with `name` and `classify(text) ->
+Prediction(label, confidence, backend)`. The stub raising `NotImplementedError` with
+enable instructions makes the pluggability *real and tested* (the harness scores
+whichever arms exist) while being honest that the model isn't trained yet — it also
+encodes S4's bar: the finetuned arm must CLEAR the margin (≥5 pts over the best
+prompt), not tie, because it adds permanent MLOps burden.
+
+**27.** Deterministic (marker substring) means the weakness reproduces on every run:
+no flaky detection, no "passed locally, failed in CI" — and the eval suite can assert
+the report *finds* it. A RNG-based flaw would make the report machinery's correctness
+untestable, which defeats the point of building the report at all.
+
+**28.** The test asserts the simulated swap `(leave_adjustment, payroll_dispute)`
+appears in the reported pairs and fails loudly otherwise ("simulated weakness not
+detected") — i.e., the report is validated against a *known planted defect*, like a
+canary. It also asserts the clean prompted arm reports NO such pair.
+
+**29.** Because keyword routers are template-matched against the synthetic generator's
+own phrasing — testing them on it measures nothing. The <0.5 test documents, honestly
+and in CI, that mocks collapse on real phrasing (Bitext ≈ 0.20): that gap is exactly
+why the real LLM/decision arms (and eventually fine-tuning) exist. Once keyed, a
+variant test should assert the real arm clears 0.85 on the same real data.
+
+**30.** (1) hard-metric fail → "keep, revisit"; (2) candidate ≥ current − 0.02 →
+"switch"; (3) otherwise → "keep current". The margin is pre-stated so results can't
+be argued into a decision (the S2 rule), and it's derived from N (on n=480, one flip
+≈ 0.2 pt; 2 pts ≈ 10 flips, above noise). Hard fail here = a confusable-pair cluster
+in the candidate (the "invented tax adjustment" analog) — accuracy can't buy back a
+correctness failure.
+
+**31.** It serves nobody: `serves_users: False` — candidate predictions are recorded,
+never returned to a user. Output goes to the caller + one summary row in
+`eval_results`. It runs first because it's the zero-risk rung: you gather real-distribution
+evidence before exposing even 5% of traffic.
+
+**32.** `POST /compare/flags {feature, active_backend, model_id}` with a Bearer token;
+`require_hr_admin` (an `Annotated` dependency in auth.py) raises 403 for non-admins —
+tested by logging in as employee 3 and asserting 403, then as employee 1 (hr_admin)
+and asserting the flip works. Rollback = flip the flag back (one call, no deploy);
+every trace already records (feature, prompt_ver, model_id).
+
+**33.** `LocalScoreStore` (jsonl at `db/seed/retrieval_scores.jsonl`, overridable via
+`RETRIEVAL_SCORES_PATH`) and `LangfuseScoreStore` (reads retrieval-score observations
+from the Langfuse public API). `get_store()` returns the keyed store when
+LANGFUSE_PUBLIC_KEY/SECRET_KEY are set, else local — so CI and offline demos always
+run on local, and the same drift math consumes either source.
+
+**34.** Baseline = previous 30 days, recent = last 7 days, alert at ≥10% relative
+drop. The onset date (first day the score fell below baseline×(1−threshold)) matters
+because "when" localizes the cause: onset clustered against upload/ingestion events
+is what pinned the S3 story on the scan uploads.
+
+**35.** Rule: an employee may read only their own score series; others' are 403 —
+unless the caller is hr_admin. It reuses S1's identity reflex (identity from the JWT,
+scope checked in code, exactly like the RLS-scoped tools). The cohort table shows
+affected employees with lower recent scores + high scanned-share + a real drop, vs
+healthy employees with stable scores and zero scanned-share — the discriminating
+dimensions, not a wall of undifferentiated rows.
+
 </details>
 
 ---
@@ -740,6 +917,8 @@ one; the complaint hotline had a three-week lag.
 1. **Before each phase:** re-read the relevant Part 1 section.
 2. **After each phase:** answer that phase's questions *closed-book*. Wrong or
    hesitant answers = re-read, not re-memorize — rebuild the mental model.
-3. **Before the panel:** answer all 25 cold, then read your own written answers —
-   anywhere you wrote something vague, that's what the panel will probe.
-4. Anything marked 🔶 at the top = refresh before presenting.
+3. **Before the panel:** answer all 35 cold (A–E), then read your own written
+   answers — anywhere you wrote something vague, that's what the panel will probe.
+4. Section E (🆕) maps to what actually shipped in Phases 4–7; §15–§17 are the
+   as-built reference, and §17 doubles as your "real bugs I caught" story bank.
+5. The answer key's wording is the target *depth*, not the target text.
